@@ -1,147 +1,106 @@
-import os
-import random
-import string
-import sys
+import os, random, string, sys
 from flask import Flask, render_template_string, session
 from flask_socketio import SocketIO, emit
 
-# Forçar a senha a aparecer no LOG do Render (sys.stderr garante o envio)
+# Força a saída do log para você ver a senha rápido
 def log_now(msg):
     print(msg, file=sys.stderr, flush=True)
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'chave-ultra-secreta-99'
-# Gevent é essencial para não dar erro de porta no Render
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+app.config['SECRET_KEY'] = 'stabilidade-maxima'
+# Usamos threading se o gevent estiver dando erro de porta
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent', ping_timeout=120)
 
-# Gerar senha automática de 10 dígitos
 AUTO_PASSWORD = ''.join(random.choices(string.digits, k=10))
-
-log_now("\n" + "!"*40)
-log_now(f"!!! SENHA DO CHAT: {AUTO_PASSWORD} !!!")
-log_now("!"*40 + "\n")
+log_now(f"\n" + "!"*30 + f"\nSENHA: {AUTO_PASSWORD}\n" + "!"*30)
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Call HD & Chat Privado</title>
+    <title>Chat Estável</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #09090b; color: #fff; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .box { width: 380px; background: #18181b; border: 1px solid #3f3f46; border-radius: 20px; padding: 30px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.7); }
+        body { background: #000; color: #0f0; font-family: monospace; display: flex; justify-content: center; padding: 20px; }
+        .container { width: 100%; max-width: 400px; border: 1px solid #0f0; padding: 20px; border-radius: 10px; }
+        input { width: 100%; background: #111; border: 1px solid #0f0; color: #0f0; padding: 10px; margin-bottom: 10px; box-sizing: border-box; }
+        .btn { width: 100%; padding: 10px; background: #0f0; color: #000; border: none; font-weight: bold; cursor: pointer; margin-bottom: 10px; }
+        #chat { height: 200px; overflow-y: auto; border: 1px solid #333; margin: 10px 0; padding: 5px; font-size: 12px; }
         .hidden { display: none; }
-        input { width: 100%; background: #09090b; border: 1px solid #3f3f46; color: #fff; padding: 12px; border-radius: 8px; margin-bottom: 12px; box-sizing: border-box; outline: none; }
-        input:focus { border-color: #3b82f6; }
-        .btn { width: 100%; padding: 12px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; transition: 0.2s; }
-        .btn:hover { background: #2563eb; }
-        .btn-call { background: #10b981; margin-bottom: 15px; }
-        .btn-call.active { background: #ef4444; }
-        #chat-win { height: 250px; overflow-y: auto; background: #09090b; margin: 15px 0; padding: 15px; border-radius: 10px; text-align: left; font-size: 0.9em; border: 1px solid #27272a; }
-        .msg-item { margin-bottom: 8px; line-height: 1.4; }
-        .user-name { color: #3b82f6; font-weight: bold; }
-        .sys-msg { color: #71717a; font-style: italic; font-size: 0.8em; text-align: center; }
     </style>
 </head>
 <body>
-    <div id="login-screen" class="box">
-        <h2 style="margin-top:0">🔒 Acesso</h2>
-        <input type="text" id="nameInput" placeholder="Seu Nome">
-        <input type="password" id="passInput" placeholder="Senha (veja no log do Render)">
-        <button class="btn" onclick="login()">ENTRAR NO CHAT</button>
-    </div>
-
-    <div id="app-screen" class="box hidden">
-        <h3 id="status-label" style="color:#a1a1aa; font-size:0.8em">SESSÃO ATIVA</h3>
-        <button id="callBtn" class="btn btn-call" onclick="toggleCall()">LIGAR MICROFONE HD</button>
-        <div id="chat-win"></div>
-        <div style="display:flex; gap: 5px">
-            <input type="text" id="msgInput" placeholder="Mensagem..." style="margin:0">
-            <button class="btn" style="width:60px" onclick="sendMsg()">➤</button>
+    <div class="container">
+        <div id="login-box">
+            <h3>ACESSO</h3>
+            <input type="text" id="n" placeholder="Nome">
+            <input type="password" id="p" placeholder="Senha">
+            <button class="btn" onclick="auth()">CONECTAR</button>
+        </div>
+        <div id="chat-box" class="hidden">
+            <button id="mBtn" class="btn" style="background: #555;" onclick="startV()">ATIVAR MICROFONE</button>
+            <div id="chat"></div>
+            <input type="text" id="msg" placeholder="Mensagem...">
         </div>
     </div>
 
     <script>
-        const socket = io();
-        let audioCtx;
-        let isCalling = false;
-        const SAMPLE_RATE = 24000;
+        const socket = io({ transports: ['websocket'], upgrade: false });
+        let aCtx; let isV = false;
 
-        function login() {
-            const name = document.getElementById('nameInput').value;
-            const password = document.getElementById('passInput').value;
-            if(name && password) socket.emit('authenticate', {name, password});
-        }
-
-        socket.on('auth_result', (data) => {
-            if(data.success) {
-                document.getElementById('login-screen').classList.add('hidden');
-                document.getElementById('app-screen').classList.remove('hidden');
-            } else {
-                alert("Senha Incorreta!");
-            }
+        function auth() { socket.emit('login', {n: document.getElementById('n').value, p: document.getElementById('p').value}); }
+        
+        socket.on('login_ok', (d) => {
+            if(d.ok) {
+                document.getElementById('login-box').classList.add('hidden');
+                document.getElementById('chat-box').classList.remove('hidden');
+            } else { alert("Senha incorreta"); }
         });
 
-        function sendMsg() {
-            const input = document.getElementById('msgInput');
-            if(input.value.trim()) {
-                socket.emit('chat_msg', {text: input.value});
-                input.value = '';
-            }
-        }
+        document.getElementById('msg').onkeypress = (e) => {
+            if(e.key === 'Enter') { socket.emit('m', e.target.value); e.target.value = ''; }
+        };
 
-        document.getElementById('msgInput').addEventListener('keypress', (e) => { if(e.key === 'Enter') sendMsg(); });
-
-        socket.on('text_update', (data) => {
-            const win = document.getElementById('chat-win');
-            const isSys = data.user === 'Sistema';
-            win.innerHTML += isSys ? `<div class="sys-msg">${data.text}</div>` : 
-                                    `<div class="msg-item"><span class="user-name">${data.user}:</span> ${data.text}</div>`;
-            win.scrollTop = win.scrollHeight;
+        socket.on('m_msg', (d) => {
+            const c = document.getElementById('chat');
+            c.innerHTML += `<div>> <b>${d.u}:</b> ${d.t}</div>`;
+            c.scrollTo(0, c.scrollHeight);
         });
 
-        async function toggleCall() {
-            if (isCalling) return location.reload();
-            isCalling = true;
-            const btn = document.getElementById('callBtn');
-            btn.innerText = "DESLIGAR MIC";
-            btn.classList.add('active');
+        async function startV() {
+            if(isV) return location.reload();
+            isV = true;
+            document.getElementById('mBtn').innerText = "MICROFONE LIGADO";
+            document.getElementById('mBtn').style.background = "#f00";
             
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    audio: { echoCancellation: true, noiseSuppression: true } 
-                });
-                const source = audioCtx.createMediaStreamSource(stream);
-                const processor = audioCtx.createScriptProcessor(2048, 1, 1);
-                source.connect(processor);
-                processor.connect(audioCtx.destination);
-                processor.onaudioprocess = (e) => {
-                    const inputData = e.inputBuffer.getChannelData(0);
-                    const int16 = new Int16Array(inputData.length);
-                    for (let i = 0; i < inputData.length; i++) {
-                        int16[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
-                    }
-                    socket.emit('voice_stream', int16.buffer);
-                };
-            } catch (err) { alert("Permita o microfone no navegador!"); }
+            aCtx = new AudioContext({ sampleRate: 16000 }); // Reduzi para 16kHz (mais estável no Render)
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const source = aCtx.createMediaStreamSource(stream);
+            const proc = aCtx.createScriptProcessor(8192, 1, 1); // Buffer maior para evitar cortes
+            
+            source.connect(proc); proc.connect(aCtx.destination);
+            
+            proc.onaudioprocess = (e) => {
+                const input = e.inputBuffer.getChannelData(0);
+                const i16 = new Int16Array(input.length);
+                for (let i = 0; i < input.length; i++) i16[i] = input[i] * 0x7FFF;
+                socket.emit('v_in', i16.buffer);
+            };
         }
 
-        let nextStartTime = 0;
-        socket.on('audio_out', (buffer) => {
-            if (!audioCtx) return;
-            const int16 = new Int16Array(buffer);
-            const float32 = new Float32Array(int16.length);
-            for (let i = 0; i < int16.length; i++) { float32[i] = int16[i] / 0x7FFF; }
-            const audioBuf = audioCtx.createBuffer(1, float32.length, SAMPLE_RATE);
-            audioBuf.getChannelData(0).set(float32);
-            const source = audioCtx.createBufferSource();
-            source.buffer = audioBuf;
-            source.connect(audioCtx.destination);
-            const now = audioCtx.currentTime;
-            if (nextStartTime < now) nextStartTime = now + 0.08;
-            source.start(nextStartTime);
-            nextStartTime += audioBuf.duration;
+        let nTime = 0;
+        socket.on('v_out', (buf) => {
+            if(!aCtx) return;
+            const i16 = new Int16Array(buf);
+            const f32 = new Float32Array(i16.length);
+            for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 0x7FFF;
+            const ab = aCtx.createBuffer(1, f32.length, 16000);
+            ab.getChannelData(0).set(f32);
+            const src = aCtx.createBufferSource();
+            src.buffer = ab; src.connect(aCtx.destination);
+            const now = aCtx.currentTime;
+            if (nTime < now) nTime = now + 0.15; // Jitter buffer maior
+            src.start(nTime); nTime += ab.duration;
         });
     </script>
 </body>
@@ -149,30 +108,23 @@ HTML_TEMPLATE = """
 """
 
 @app.route('/')
-def index():
-    return render_template_string(HTML_TEMPLATE)
+def index(): return render_template_string(HTML_TEMPLATE)
 
-@socketio.on('authenticate')
-def handle_auth(data):
-    if data.get('password') == AUTO_PASSWORD:
-        session['user'] = data.get('name', 'Anônimo')
-        session['auth'] = True
-        emit('auth_result', {'success': True, 'name': session['user']})
-        emit('text_update', {'user': 'Sistema', 'text': f"🟢 {session['user']} entrou na sala."}, broadcast=True)
-    else:
-        emit('auth_result', {'success': False})
+@socketio.on('login')
+def login(d):
+    if d.get('p') == AUTO_PASSWORD:
+        session['u'] = d.get('n', 'User')
+        emit('login_ok', {'ok': True})
+    else: emit('login_ok', {'ok': False})
 
-@socketio.on('chat_msg')
-def handle_chat(data):
-    if session.get('auth'):
-        emit('text_update', {'user': session.get('user'), 'text': data['text']}, broadcast=True)
+@socketio.on('m')
+def msg(t):
+    if 'u' in session: emit('m_msg', {'u': session['u'], 't': t}, broadcast=True)
 
-@socketio.on('voice_stream')
-def handle_voice(data):
-    if session.get('auth'):
-        emit('audio_out', data, broadcast=True, include_self=False)
+@socketio.on('v_in')
+def voice(b):
+    if 'u' in session: emit('v_out', b, broadcast=True, include_self=False)
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
-    # Rodar com socketio em vez de app.run para suportar WebSocket
     socketio.run(app, host='0.0.0.0', port=port)
