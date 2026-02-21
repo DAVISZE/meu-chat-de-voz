@@ -3,46 +3,63 @@ from flask import Flask, render_template_string
 from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
-# Ping curto para manter o túnel do Render aberto e rápido
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent', ping_interval=2, ping_timeout=5)
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Voz Direta</title>
+    <title>Voz Direta (Keep Awake)</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
-        body { background: #000; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; font-family: sans-serif; }
-        #vBtn { width: 200px; height: 200px; border-radius: 50%; border: none; background: #3b82f6; color: white; font-weight: bold; cursor: pointer; font-size: 1.2em; transition: 0.3s; }
-        #vBtn.on { background: #ef4444; box-shadow: 0 0 20px #ef4444; }
-        p { margin-top: 20px; color: #666; }
+        body { background: #000; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; font-family: sans-serif; overflow: hidden; }
+        #vBtn { width: 180px; height: 180px; border-radius: 50%; border: 4px solid #333; background: #222; color: white; font-weight: bold; cursor: pointer; font-size: 1.1em; transition: 0.3s; z-index: 10; }
+        #vBtn.on { background: #ef4444; border-color: #ff8888; box-shadow: 0 0 30px #ef4444; }
+        #st { margin-top: 20px; font-family: monospace; color: #0f0; font-size: 0.9em; }
+        .info { position: absolute; bottom: 20px; color: #444; font-size: 0.7em; }
     </style>
 </head>
 <body>
     <button id="vBtn" onclick="t()">LIGAR VOZ</button>
-    <p id="st">Status: Desconectado</p>
+    <p id="st">Status: Offline</p>
+    <div class="info">Tela sempre ativa enquanto o áudio estiver ON</div>
 
     <script>
         const socket = io({ transports: ['websocket'] });
-        let ac; let isOn = false;
-        const RATE = 12000; // Equilíbrio entre qualidade e peso para o Render
+        let ac, wakeLock = null;
+        let isOn = false;
+        const RATE = 12000;
 
-        socket.on('connect', () => document.getElementById('st').innerText = "Status: Online");
+        socket.on('connect', () => document.getElementById('st').innerText = "Status: Conectado");
+
+        // Função para manter a tela acesa
+        async function stayAwake() {
+            try {
+                if ('wakeLock' in navigator) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    console.log("Tela bloqueada para não apagar!");
+                }
+            } catch (err) {
+                console.log("Erro ao manter tela ativa:", err);
+            }
+        }
 
         async function t() {
             if(isOn) return location.reload();
             isOn = true;
+            
             const btn = document.getElementById('vBtn');
             btn.innerText = "DESLIGAR";
             btn.classList.add('on');
             
+            // Ativa o Wake Lock
+            stayAwake();
+            
             ac = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RATE });
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             const source = ac.createMediaStreamSource(stream);
-            
-            // Buffer pequeno para latência mínima
             const proc = ac.createScriptProcessor(2048, 1, 1);
+            
             source.connect(proc);
             proc.connect(ac.destination);
             
@@ -67,6 +84,13 @@ HTML_TEMPLATE = """
             src.connect(ac.destination);
             src.start(ac.currentTime);
         });
+
+        // Se o usuário alternar abas e voltar, reativa o bloqueio de suspensão
+        document.addEventListener('visibilitychange', async () => {
+            if (wakeLock !== null && document.visibilityState === 'visible') {
+                stayAwake();
+            }
+        });
     </script>
 </body>
 </html>
@@ -77,7 +101,6 @@ def index(): return render_template_string(HTML_TEMPLATE)
 
 @socketio.on('v')
 def h_v(b):
-    # Envia para todos, sem validação de senha para ser instantâneo
     emit('o', b, broadcast=True, include_self=False)
 
 if __name__ == '__main__':
